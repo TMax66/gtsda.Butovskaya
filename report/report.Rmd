@@ -1,0 +1,327 @@
+---
+title: "Monitoraggio dei residui degli antibiotici nelle carni in Lombardia ed Emilia-Romagna
+  (2018-2022) (E.Butovskaya)"
+Author: GTSDA
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r include=FALSE}
+library(here)
+library(tidyverse)
+library(lubridate)
+library(odbc)
+library(DBI)
+library(rgeos)
+library(rmapshaper)
+library(raster)
+library(rgdal)
+library(sp)
+library(leaflet)
+library(maps)
+library(readxl)
+library(openxlsx)
+library(DT)
+library(gt)
+library(tmap)
+library(GADMTools)
+library(tmaptools)
+library(stringr)
+library(patchwork)
+```
+
+
+```{r include=FALSE}
+dt <- readRDS(here("data", "processed", "dati.RDS"))
+dt <- dt %>% 
+  filter(!finalita %in% c("Autocontrollo", "Progetto: PRC2014010", "Esame batteriologico MSU", "PNR Sospetto MSU") ) %>% 
+  mutate(matrice = recode(matrice, 
+                          "MUSCOLO DI BOVINO ADULTO" = "MUSCOLO DI BOVINO", 
+                          "MUSCOLO DI VITELLO" = "MUSCOLO DI BOVINO", 
+                          "MUSCOLO DI VITELLONE" = "MUSCOLO DI BOVINO",
+                          "MUSCOLO DI SUINO DA INGRASSO" = "MUSCOLO DI SUINO", 
+                          "MUSCOLO DI SUINO LATTONZOLO/MAGRONE/MAGRONCELLO" = "MUSCOLO DI SUINO", 
+                          "MUSCOLO DI SUINO RIPRODUTTORE FEMMINA" = "MUSCOLO DI SUINO", 
+                          "MUSCOLO DI SUINO RIPRODUTTORE MASCHIO" = "MUSCOLO DI SUINO", 
+                          "MUSCOLO DI SUINO LATTONZOLO/MAGRONE/MAGRONCELLO" =  "MUSCOLO DI SUINO"), 
+         nconf = paste0(anno, "/", nconf),
+         PresAB = ifelse(Tecnica == "LC-MS/MS" & esiti == "Irr/Pos", 1, 
+                        ifelse(!is.na(valore), 1, 0)), 
+                        PosAB = ifelse(Tecnica == "LC-MS/MS" & esiti == "Irr/Pos", 1, 0 ), 
+         month = month(dtprel),
+         Ymonth = paste0(anno,"-", month))
+```
+
+
+## Outline:
+
+1.	
+
+    a) Qual è la frequenza con cui si riscontra la presenza dei residui degli antibiotici nelle tre matrici considerate? Ci sono variazioni annuali, tendenza statisticamente significativa di diminuzione negli anni? (Sono da considerare anche i campioni dichiarati regolari/negativi in cui è stato confermato un valore sopra il LOD).
+
+    b)  Tra i campioni risultati positivi quanti superano i LMR? Quanti sono i campioni dichiarati irregolari/positivi pur non superando i LMR a causa del trattamento non dichiarato? Quanti campioni risultano positivi per più di una sostanza antibiotica?
+
+2.	Quali sono le molecole di antibiotici più frequentemente riscontrabili all’interno delle tre categorie di matrici? Quali sono i range di concentrazioni riscontrate? Di quante volte superano i LMR?
+
+3.	Qual è la distribuzione geografica dei campioni positivi? Esiste una correlazione significativa tra la provincia/comune del prelievo ed il riscontro dei residui degli antibiotici eventualmente collegabile alla densità di allevamenti tracciabile con l’Anagrafe Zootecnica? 
+
+
+### Attività di campionamento per matrice 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dt %>% 
+ group_by(matrice, anno,nconf, dtprel, Ymonth) %>% 
+  #summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%    
+  # distinct(nconf, .keep_all = TRUE) %>% 
+  #group_by(matrice, anno, Ymonth) %>% 
+  #count() %>%
+  group_by(matrice,month = floor_date(dtprel, 'month')) %>% 
+  count() %>%  
+  ggplot()+
+  aes(x = month, y = n)+
+  geom_point()+
+  geom_line(group = 1)+ geom_smooth()+
+  facet_wrap(. ~ matrice)+
+  theme_bw()
+
+```
+
+#### Frequenza di conferimenti con presenza di AB 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ dt %>% 
+ group_by(matrice, anno,nconf, dtprel, ) %>% 
+  summarise(sAB = sum(PresAB, na.rm = TRUE)) %>%     
+  # distinct(nconf, .keep_all = TRUE) %>% 
+  #group_by(matrice, anno, Ymonth) %>% 
+  #count() %>%
+  group_by(matrice,month = floor_date(dtprel, 'month')) %>% 
+  mutate(PresAB = ifelse(sAB >= 1, 1, 0)) %>% 
+  group_by(matrice, month) %>% 
+  summarise(confP = sum(PresAB), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>%   
+  ggplot()+
+  aes(x = month, y = P)+
+  geom_point()+
+  geom_line(group = 1)+ geom_smooth()+
+  facet_wrap(. ~ matrice, scales = "free")+
+  theme_bw()+ labs(y = "% di conferimenti con presenza di residui di antibiotico")
+```
+
+#### Frequenza di conferimenti Pos ad almeno un AB (>LMR) 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ dt %>% 
+ group_by(matrice, anno,nconf, dtprel, ) %>% 
+  summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%     
+  # distinct(nconf, .keep_all = TRUE) %>% 
+  #group_by(matrice, anno, Ymonth) %>% 
+  #count() %>%
+  group_by(matrice,month = floor_date(dtprel, 'month')) %>% 
+  mutate(PosAB = ifelse(sAB >= 1, 1, 0)) %>% 
+  group_by(matrice, month) %>% 
+  summarise(confP = sum(PosAB), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>%   
+  ggplot()+
+  aes(x = month, y = P)+
+  geom_point()+
+  geom_line(group = 1)+ geom_smooth()+
+  facet_wrap(. ~ matrice, scales = "free")+
+  theme_bw()+ labs(y = "% di conferimenti Pos ad almeno un AB (>LMR")
+```
+
+
+
+
+
+
+
+
+#### Distribuzione geografica dei conferimenti positivi
+
+
+```{r include=FALSE}
+com <- readRDS(here( "data","ITA_adm3.sf.rds"))
+prov <- readRDS(here( "data","ITA_adm2.sf.rds"))
+reg <- readRDS(here( "data","ITA_adm1.sf.rds"))
+
+```
+
+#####  Muscolo di Bovino
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pos_com <- dt %>% 
+  filter(!comune %in% c("Non Definito")) %>% 
+  group_by(matrice, nconf, dtprel, comune ) %>% 
+  summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%  
+  group_by(matrice,  comune) %>% 
+  mutate(posAB = ifelse(sAB >= 1, 1, 0)) %>%  
+  summarise(confP = sum(posAB, na.rm = TRUE), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>% 
+  mutate(comune = str_replace_all(comune, fixed(" "), ""), 
+         comune = casefold(comune, upper = FALSE)) %>% 
+filter(matrice == "MUSCOLO DI BOVINO")    
+
+regioni <- c("Lombardia", "Emilia-Romagna")
+REG <- reg %>% filter(NAME_1 %in% regioni)
+mapPr<- com %>%
+  filter(NAME_1 %in% regioni ) %>% 
+  mutate(NAME_3 = str_replace_all(NAME_3, fixed(" "), ""),
+         NAME_3 = casefold(NAME_3, upper = FALSE)) %>% 
+  left_join(pos_com, by = c("NAME_3" = "comune")) %>% 
+  group_by(NAME_2) %>% 
+  summarise(confP = sum(confP, na.rm = TRUE), 
+            n = sum(n , na.rm = TRUE))%>%  
+  mutate(P = round(100*(confP/n), 2))  
+
+ tm_shape(mapPr)+tm_fill("P", colorNA = "white")+tm_borders(col = "blue")+
+  tm_shape(REG)+tm_borders("black")+ tm_fill("white", alpha = 0.001)+ tm_borders("black")+
+   
+tm_layout(main.title = " % di campioni di muscolo bovino con presenza di residui di AB nel periodo 2018-2022",
+          main.title.size = 0.80,
+          legend.title.size = 1,
+          legend.text.size = 0.5,
+          legend.position = c("right","top"),
+          legend.bg.color = "white",
+          legend.bg.alpha = 1)+
+  tm_scale_bar(breaks = c(0, 50, 100), text.size = .5,position = "left")+
+  tm_compass(type = "8star", position = c("right", "bottom"), size =  1) +
+    tm_text("NAME_2", size = 1/2)
+
+```
+
+##### Muscolo Suino
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pos_com <- dt %>% 
+  filter(!comune %in% c("Non Definito")) %>% 
+  group_by(matrice, nconf, dtprel, comune ) %>% 
+  summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%  
+  group_by(matrice,  comune) %>% 
+  mutate(posAB = ifelse(sAB >= 1, 1, 0)) %>%  
+  summarise(confP = sum(posAB, na.rm = TRUE), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>% 
+  mutate(comune = str_replace_all(comune, fixed(" "), ""), 
+         comune = casefold(comune, upper = FALSE)) %>% 
+filter(matrice == "MUSCOLO DI SUINO")    
+
+regioni <- c("Lombardia", "Emilia-Romagna")
+REG <- reg %>% filter(NAME_1 %in% regioni)
+mapPr<- com %>%
+  filter(NAME_1 %in% regioni ) %>% 
+  mutate(NAME_3 = str_replace_all(NAME_3, fixed(" "), ""),
+         NAME_3 = casefold(NAME_3, upper = FALSE)) %>% 
+  left_join(pos_com, by = c("NAME_3" = "comune")) %>% 
+  group_by(NAME_2) %>% 
+  summarise(confP = sum(confP, na.rm = TRUE), 
+            n = sum(n , na.rm = TRUE))%>%  
+  mutate(P = round(100*(confP/n), 2))  
+
+tm_shape(mapPr)+tm_fill("P", colorNA = "white")+tm_borders(col = "blue")+
+  tm_shape(REG)+tm_borders("black")+ tm_fill("white", alpha = 0.001)+ tm_borders("black")+
+   
+tm_layout(main.title = " % di campioni di muscolo suino con presenza di residui di AB nel periodo 2018-2022",
+          main.title.size = 0.80,
+          legend.title.size = 1,
+          legend.text.size = 0.5,
+          legend.position = c("right","top"),
+          legend.bg.color = "white",
+          legend.bg.alpha = 1)+
+  tm_scale_bar(breaks = c(0, 50, 100), text.size = .5,position = "left")+
+  tm_compass(type = "8star", position = c("right", "bottom"), size =  1) 
+
+
+```
+
+
+##### Muscolo di Pollo
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pos_com <- dt %>% 
+  filter(!comune %in% c("Non Definito")) %>% 
+  group_by(matrice, nconf, dtprel, comune ) %>% 
+  summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%  
+  group_by(matrice,  comune) %>% 
+  mutate(posAB = ifelse(sAB >= 1, 1, 0)) %>%  
+  summarise(confP = sum(posAB, na.rm = TRUE), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>% 
+  mutate(comune = str_replace_all(comune, fixed(" "), ""), 
+         comune = casefold(comune, upper = FALSE)) %>% 
+filter(matrice == "MUSCOLO DI POLLO")    
+
+regioni <- c("Lombardia", "Emilia-Romagna")
+REG <- reg %>% filter(NAME_1 %in% regioni)
+mapPr<- com %>%
+  filter(NAME_1 %in% regioni ) %>% 
+  mutate(NAME_3 = str_replace_all(NAME_3, fixed(" "), ""),
+         NAME_3 = casefold(NAME_3, upper = FALSE)) %>% 
+  left_join(pos_com, by = c("NAME_3" = "comune")) %>% 
+  group_by(NAME_2) %>% 
+  summarise(confP = sum(confP, na.rm = TRUE), 
+            n = sum(n , na.rm = TRUE))%>%  
+  mutate(P = round(100*(confP/n), 2))  
+
+tm_shape(mapPr)+tm_fill("P", colorNA = "white")+tm_borders(col = "blue")+
+  tm_shape(REG)+tm_borders("black")+ tm_fill("white", alpha = 0.001)+ tm_borders("black")+
+   
+tm_layout(main.title = " % di campioni di muscolo di pollo con presenza di residui di AB nel periodo 2018-2022",
+          main.title.size = 0.80,
+          legend.title.size = 1,
+          legend.text.size = 0.5,
+          legend.position = c("right","top"),
+          legend.bg.color = "white",
+          legend.bg.alpha = 1)+
+  tm_scale_bar(breaks = c(0, 50, 100), text.size = .5,position = "left")+
+  tm_compass(type = "8star", position = c("right", "bottom"), size =  1) 
+
+
+```
+
+##### Muscolo di Tacchino
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pos_com <- dt %>% 
+  filter(!comune %in% c("Non Definito")) %>% 
+  group_by(matrice, nconf, dtprel, comune ) %>% 
+  summarise(sAB = sum(PosAB, na.rm = TRUE)) %>%  
+  group_by(matrice,  comune) %>% 
+  mutate(posAB = ifelse(sAB >= 1, 1, 0)) %>%  
+  summarise(confP = sum(posAB, na.rm = TRUE), 
+            n = n()) %>%  
+  mutate(P = round(100*(confP/n), 2)) %>% 
+  mutate(comune = str_replace_all(comune, fixed(" "), ""), 
+         comune = casefold(comune, upper = FALSE)) %>% 
+filter(matrice == "MUSCOLO DI TACCHINO")    
+
+regioni <- c("Lombardia", "Emilia-Romagna")
+REG <- reg %>% filter(NAME_1 %in% regioni)
+mapPr<- com %>%
+  filter(NAME_1 %in% regioni ) %>% 
+  mutate(NAME_3 = str_replace_all(NAME_3, fixed(" "), ""),
+         NAME_3 = casefold(NAME_3, upper = FALSE)) %>% 
+  left_join(pos_com, by = c("NAME_3" = "comune")) %>% 
+  group_by(NAME_2) %>% 
+  summarise(confP = sum(confP, na.rm = TRUE), 
+            n = sum(n , na.rm = TRUE))%>%  
+  mutate(P = round(100*(confP/n), 2))  
+
+tm_shape(mapPr)+tm_fill("P", colorNA = "white")+tm_borders(col = "blue")+
+  tm_shape(REG)+tm_borders("black")+ tm_fill("white", alpha = 0.001)+ tm_borders("black")+
+   
+tm_layout(main.title = " % di campioni di muscolo di tacchino con presenza di residui di AB nel periodo 2018-2022",
+          main.title.size = 0.80,
+          legend.title.size = 1,
+          legend.text.size = 0.5,
+          legend.position = c("right","top"),
+          legend.bg.color = "white",
+          legend.bg.alpha = 1)+
+  tm_scale_bar(breaks = c(0, 50, 100), text.size = .5,position = "left")+
+  tm_compass(type = "8star", position = c("right", "bottom"), size =  1) 
+
+
+```
