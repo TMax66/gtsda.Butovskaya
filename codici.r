@@ -2,6 +2,8 @@ library(here)
 library(tidyverse)
 library(openxlsx)
 library(readxl)
+library(rstanarm)
+library(ggrepel)
 
 
 dt <- read_excel(here("data", "raw", "fulldata.xlsx"))
@@ -29,20 +31,18 @@ prov <- tibble(
           78297, 
           157549,
           234135, 
-          177041)
-)
-
-
-gly <- tibble(
-  prov = prov, 
+          177041), 
   gly = c(0, 	0, 	0, 	5.88,	21.05,	22.22,	33.33, 33.33,	35.29,	53.85,	55.55)
 )
 
-lomb <- dt %>% 
-  filter(Territorio %in% prov) %>% 
-  left_join(
-    coltivazioni, by = c("AGRI_MADRE")) %>% 
-  filter(!is.na(`GRUPPO COLTIVAZIONE`))
+
+
+
+# lomb <- dt %>% 
+#   filter(Territorio %in% prov) %>% View()
+#   left_join(
+#     coltivazioni, by = c("AGRI_MADRE")) %>% 
+#   filter(!is.na(`GRUPPO COLTIVAZIONE`))
 
 
 #associazione %campioni pos a gly e % di territorio coltivato (indip dal tipo di coltivazione)
@@ -52,12 +52,11 @@ dt %>%  filter(Territorio %in% prov$prov) %>%
   select(TIME, Territorio, Value) %>% 
   group_by(TIME, Territorio) %>% 
   summarise(Value = sum(Value)) %>% 
-  pivot_wider(names_from = "TIME", values_from = "Value") %>% 
+  pivot_wider(names_from = "TIME", values_from = "Value") %>%  
   left_join(
     prov, by = c("Territorio" = "prov")
   ) %>% 
-  left_join(gly, by = c("Territorio" = "prov")) %>% 
-  mutate('%terreni coltivati' = 100*((`2020`+`2021`)/2)/sup) %>%  
+  mutate('%terreni coltivati' = 100*((`2020`+`2021`)/2)/sup) %>%   
   
   ggplot()+
   aes(x = `%terreni coltivati`, y = gly, label = Territorio )+
@@ -65,18 +64,50 @@ dt %>%  filter(Territorio %in% prov$prov) %>%
   geom_smooth()
   
 
+#associazione %campioni pos a gly e % di territorio coltivato condizionalmente al tipo di coltivazione
+
+dt %>%  filter(Territorio %in% prov$prov) %>% 
+  filter(`Tipo dato` == "superficie totale - ettari", 
+         TIME %in% c(2020, 2021)) %>% 
+  left_join(
+    prov, by = c("Territorio" = "prov")
+  ) %>%  
+  left_join(
+    coltivazioni, by = c("AGRI_MADRE")) %>% 
+  filter(!is.na(`GRUPPO COLTIVAZIONE`)) %>%  
+  select(TIME, Territorio,`GRUPPO COLTIVAZIONE`,`Tipo dato`, Value) %>% 
+  group_by(TIME, Territorio,`GRUPPO COLTIVAZIONE` ) %>% 
+  summarise(Value = sum(Value)) %>% 
+  pivot_wider(names_from = "TIME", values_from = "Value") %>%  
+  left_join(
+    prov, by = c("Territorio" = "prov")
+  ) %>% 
+  mutate('%terreni coltivati' = 100*((`2020`+`2021`)/2)/sup) %>%   
+  ggplot()+
+  aes(x = `%terreni coltivati`, y = gly, label = Territorio )+
+  geom_point()+ geom_text_repel()+
+  geom_smooth()+
+  facet_wrap(~`GRUPPO COLTIVAZIONE`, scales = "free")
+  
 
 
 
 
 
+lmod <- dt %>%  filter(Territorio %in% prov$prov) %>% 
+  filter(`Tipo dato` == "superficie totale - ettari", 
+         TIME %in% c(2020, 2021)) %>% 
+  select(TIME, Territorio, Value) %>% 
+  group_by(TIME, Territorio) %>% 
+  summarise(Value = sum(Value)) %>% 
+  pivot_wider(names_from = "TIME", values_from = "Value") %>%  
+  left_join(
+    prov, by = c("Territorio" = "prov")
+  ) %>% 
+  mutate(Y = 100*((`2020`+`2021`)/2)/sup) %>% data.frame()
 
-
-
-
-
-
-
+  stan_lm(gly~Y, data = lmod)
+ 
 
 
 
