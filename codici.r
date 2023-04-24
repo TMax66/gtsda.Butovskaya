@@ -1,10 +1,12 @@
-library(here)
-library(tidyverse)
-library(openxlsx)
-library(readxl)
-library(rstanarm)
-library(ggrepel)
+# library(here)
+# library(tidyverse)
+# library(openxlsx)
+# library(readxl)
+# library(rstanarm)
+# library(ggrepel)
 
+
+source("librerie.R")
 
 dt <- read_excel(here("data", "raw", "fulldata.xlsx"))
 coltivazioni <- read_excel(here("data", "raw", "tabcolt.xlsx"))
